@@ -184,7 +184,7 @@ def summarize_results(df_results, fdr_cutoff, fwer_cutoff=0.05):
         logger.info(f'Top FWER-significant hits:\n{top_hits_fwer_sig.to_string()}')
 
 
-def q_compute_fdr(results_dir, fdr_cutoff, df_fdr_filter, reference_dir, pval_file, large_threshold=0.05):
+def q_compute_fdr(results_dir, fdr_cutoff, df_fdr_filter, reference_dir, pval_file, large_threshold=-2.0):
     """
     Compute False Discovery Rate and Family-Wise Error Rate corrections for scan test results.
     
@@ -197,7 +197,7 @@ def q_compute_fdr(results_dir, fdr_cutoff, df_fdr_filter, reference_dir, pval_fi
         df_fdr_filter: Optional DataFrame to filter proteins and positions
         reference_dir: Directory with reference files for result annotation
         pval_file: HDF5 filename containing p-values
-        large_threshold: P-value threshold for computational efficiency (default 0.05)
+        large_threshold: Threshold for computational efficiency (default -2.0)
         
     Returns:
         DataFrame with FDR and FWER corrected results

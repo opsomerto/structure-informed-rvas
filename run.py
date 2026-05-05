@@ -499,6 +499,11 @@ if __name__ == '__main__':
         df_results = compute_fdr(args.results_dir, args.fdr_cutoff, df_filter, args.reference_dir, args.pval_file)
         df_results.to_csv(f'{args.results_dir}/{args.fdr_file}', sep='\t', index=False)
         did_nothing = False
+    if args.fdr_only and not args.run_3dnt and args.run_q3dnt:
+        from q_empirical_fdr import q_compute_fdr
+        df_results = compute_fdr(args.results_dir, args.fdr_cutoff, df_filter, args.reference_dir, args.pval_file)
+        df_results.to_csv(f'{args.results_dir}/{args.fdr_file}', sep='\t', index=False)
+        did_nothing = False
 
     if args.save_df_rvas is not None:
         logger.info(f"Saving mapped RVAS dataframe to {args.save_df_rvas}")
