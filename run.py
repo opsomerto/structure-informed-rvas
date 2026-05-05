@@ -510,7 +510,7 @@ if __name__ == '__main__':
         df_rvas.to_csv(args.save_df_rvas, sep='\t', index=False)
         did_nothing = False
 
-    if args.run_3dnt:
+    if args.run_3dnt and not args.fdr_only:
         logger.info("Starting binary scan test analysis")
         scan_test(
             df_rvas,
@@ -530,7 +530,7 @@ if __name__ == '__main__':
         )
         did_nothing = False
 
-    elif args.run_q3dnt:
+    elif args.run_q3dnt and not args.fdr_only:
         logger.info("Starting quantitative scan test analysis")
         q_scan_test(
             df_rvas,
