@@ -409,13 +409,15 @@ if __name__ == '__main__':
         '--stat-method',
         type=str,
         default='tstat',
-        choices=['tstat', 'pval', 'hill'],
+        choices=['tstat', 'pval', 'hill', 'hillp'],
         help='''
         Statistic used to score each neighborhood after the t-statistic threshold filter.
         "tstat": negative absolute t-statistic (default, no df correction).
         "pval": two-tailed p-value via scipy.stats.t.sf with Satterthwaite degrees of freedom.
         "hill": negative absolute z-score via the Hill (1970) approximation with Satterthwaite
                 degrees of freedom.
+        "hillp": two-tailed p-value via the Hill (1970) normal approximation; faster than
+                 "pval" because it uses scipy.special.erfc instead of scipy.stats.t.sf.
         '''
     )
     parser.add_argument(
@@ -427,6 +429,26 @@ if __name__ == '__main__':
         the exact set of neighborhoods to test. If not provided, all neighborhoods for
         all qualifying proteins are tested (default behavior).
         '''
+    )
+    parser.add_argument(
+        '--run-hmp',
+        action='store_true',
+        default=False,
+        help='''
+        Build a master HMP p_values.h5 from per-trait files (Phase 1) and run
+        FDR correction over all neighborhood-cluster entries (Phase 2).
+        Requires --trait-cluster-file and --results-dir.
+        ''',
+    )
+    parser.add_argument(
+        '--trait-cluster-file',
+        type=str,
+        default=None,
+        help='''
+        Path to a TSV with columns "trait" and "cluster" that specifies which
+        per-trait ukbb_{trait}_gp/p_values.h5 files to combine and how to group
+        them into clusters. Required when --run-hmp is used.
+        ''',
     )
     args = parser.parse_args()
 
@@ -475,6 +497,22 @@ if __name__ == '__main__':
             logger.info(f"Loaded {len(select_nbhds)} selected neighborhoods from {args.select_nbhds}")
         else:
             select_nbhds = None
+    elif args.run_hmp:
+        # HMP pipeline reads pre-computed per-trait h5 files; no RVAS mapping needed.
+        df_rvas = None
+        select_nbhds = None
+        if args.df_filter is not None:
+            filter_files = args.df_filter.split(',')
+            def _read_fdr_filter(f):
+                df_f = pd.read_csv(f, sep='\t')
+                cols = (['uniprot_id', 'aa_pos'] if 'aa_pos' in df_f.columns
+                        else ['uniprot_id'])
+                return df_f[cols].drop_duplicates()
+            df_filter = _read_fdr_filter(filter_files[0])
+            for f in filter_files[1:]:
+                df_filter = pd.merge(df_filter, _read_fdr_filter(f))
+        else:
+            df_filter = None
     else:
         df_rvas, df_filter = map_and_filter_rvas(
             args.rvas_data_to_map,
@@ -494,14 +532,23 @@ if __name__ == '__main__':
 
     did_nothing = True
 
-    if args.fdr_only and not args.run_3dnt and not args.run_q3dnt:
+    if args.fdr_only and not args.run_3dnt and not args.run_q3dnt and not args.run_hmp:
         from empirical_fdr import compute_fdr
         df_results = compute_fdr(args.results_dir, args.fdr_cutoff, df_filter, args.reference_dir, args.pval_file)
         df_results.to_csv(f'{args.results_dir}/{args.fdr_file}', sep='\t', index=False)
         did_nothing = False
     if args.fdr_only and not args.run_3dnt and args.run_q3dnt:
         from q_empirical_fdr import q_compute_fdr
-        df_results = q_compute_fdr(args.results_dir, args.fdr_cutoff, df_filter, args.reference_dir, args.pval_file)
+        fdr_large_threshold = 0.05 if args.stat_method in ('pval', 'hillp') else -2.0
+        df_results = q_compute_fdr(args.results_dir, args.fdr_cutoff, df_filter, args.reference_dir, args.pval_file, fdr_large_threshold)
+        df_results.to_csv(f'{args.results_dir}/{args.fdr_file}', sep='\t', index=False)
+        did_nothing = False
+    if args.fdr_only and args.run_hmp:
+        from q_empirical_fdr_hmp import q_compute_fdr_hmp
+        df_results = q_compute_fdr_hmp(
+            args.results_dir, args.fdr_cutoff, df_filter,
+            args.reference_dir, args.pval_file, args.stat_method,
+        )
         df_results.to_csv(f'{args.results_dir}/{args.fdr_file}', sep='\t', index=False)
         did_nothing = False
 
@@ -551,6 +598,22 @@ if __name__ == '__main__':
             args.stat_method,
             select_nbhds,
         )
+        did_nothing = False
+
+    elif args.run_hmp and not args.fdr_only:
+        if args.trait_cluster_file is None:
+            raise ValueError('--run-hmp requires --trait-cluster-file')
+        from q_scan_test_hmp import build_hmp_master_h5
+        from q_empirical_fdr_hmp import q_compute_fdr_hmp
+        logger.info('Starting HMP pipeline (Phase 1: building master h5)')
+        build_hmp_master_h5(args.trait_cluster_file, args.results_dir, args.stat_method)
+        if not args.no_fdr:
+            logger.info('HMP pipeline (Phase 2: FDR correction)')
+            df_results = q_compute_fdr_hmp(
+                args.results_dir, args.fdr_cutoff, df_filter,
+                args.reference_dir, args.pval_file, args.stat_method,
+            )
+            df_results.to_csv(f'{args.results_dir}/{args.fdr_file}', sep='\t', index=False)
         did_nothing = False
 
     elif args.make_movie:
