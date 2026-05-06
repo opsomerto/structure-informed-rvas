@@ -134,6 +134,44 @@ def get_stat_matrix_hill(n_betahat, sum_betahat, sum_betahat_squared, total_n_be
     return np.where(valid_mask & np.isfinite(z), -np.abs(z), 0.0)
 
 
+def get_stat_matrix_hillp(n_betahat, sum_betahat, sum_betahat_squared, total_n_betahat, total_sum_betahat, total_sum_betahat_squared, min_variants=10):
+    '''
+    Compute two-tailed p-value via the Hill (1970) normal approximation to
+    the t-distribution with Satterthwaite degrees of freedom.
+
+    Uses scipy.special.erfc rather than scipy.stats.t.sf, which avoids the
+    incomplete beta function evaluation and is faster for large matrices.
+
+        z = t * sqrt((df - 0.5) / (df + t^2 - 1 + 0.5))
+        p = erfc(|z| / sqrt(2))  =  2 * norm.sf(|z|)
+
+    Does not apply the large_threshold filter — that is handled externally
+    in compute_all_n_a_tstats.
+
+    Returns: L x (n_sims + 1) array of p-values in (0, 1]; 1.0 for invalid neighborhoods
+    '''
+    n_in = np.asarray(n_betahat).reshape(-1, 1)
+    n_out = (total_n_betahat - n_in).reshape(-1, 1)
+    valid_mask = (n_in >= min_variants) & (total_n_betahat - n_in >= 2)
+
+    with np.errstate(divide='ignore', invalid='ignore'):
+        mean_in = sum_betahat / n_in
+        var_in = (sum_betahat_squared - n_in * mean_in**2) / (n_in - 1)
+
+        mean_out = (total_sum_betahat - sum_betahat) / n_out
+        var_out = ((total_sum_betahat_squared - sum_betahat_squared) - n_out * mean_out**2) / (n_out - 1)
+
+        w1 = var_in / n_in
+        w2 = var_out / n_out
+        t_stat = (mean_in - mean_out) / np.sqrt(w1 + w2)
+
+        df = _compute_satterthwaite_df(w1, w2, n_in, n_out)
+        z = t_stat * np.sqrt((df - 0.5) / (df + t_stat**2 - 1 + 0.5))
+        p_value = special.erfc(np.abs(z) / np.sqrt(2))
+
+    return np.where(valid_mask & np.isfinite(p_value), p_value, 1.0)
+
+
 def get_betahats_per_residue(df, n_res, n_sims, colname='betahat'):
     '''
     Aggregate statistics on a per-residue basis.
@@ -255,8 +293,8 @@ def compute_all_n_a_tstats(
     total_sum_betahat = df['betahat'].sum()
     total_sum_betahat_squared = (df['betahat'] ** 2).sum()
 
-    if method not in ('tstat', 'pval', 'hill'):
-        raise ValueError(f"Unknown method '{method}'. Choose from: 'tstat', 'pval', 'hill'")
+    if method not in ('tstat', 'pval', 'hill', 'hillp'):
+        raise ValueError(f"Unknown method '{method}'. Choose from: 'tstat', 'pval', 'hill', 'hillp'")
 
     # Step 1: always compute the t-statistic first.
     # Returns -|t| for valid neighborhoods, 0 otherwise.
@@ -282,7 +320,7 @@ def compute_all_n_a_tstats(
             min_variants,
         )
         neg_abs_tstat_matrix = np.where(pass_mask, p_matrix, 1.0)
-    else:  # 'hill'
+    elif method == 'hill':
         # -|z| (Hill approximation, Satterthwaite df) for passing entries; 0.0 elsewhere.
         z_matrix = get_stat_matrix_hill(
             n_betahat, sum_betahat, sum_betahat_squared,
@@ -290,6 +328,14 @@ def compute_all_n_a_tstats(
             min_variants,
         )
         neg_abs_tstat_matrix = np.where(pass_mask, z_matrix, 0.0)
+    else:  # 'hillp'
+        # Two-tailed p-value via Hill normal approximation; 1.0 elsewhere.
+        p_matrix = get_stat_matrix_hillp(
+            n_betahat, sum_betahat, sum_betahat_squared,
+            total_n_betahat, total_sum_betahat, total_sum_betahat_squared,
+            min_variants,
+        )
+        neg_abs_tstat_matrix = np.where(pass_mask, p_matrix, 1.0)
 
     # Create a mask to avoid division by zero
     valid_n = n_betahat > 0
@@ -364,10 +410,8 @@ def scan_test_one_protein(df, pdb_file_pos_guide, pdb_dir, pae_dir, results_dir,
     write_df_n_a_tstats(results_dir, uniprot_id, df_n_a_tstats, n_a_tstat_file)
 
     # Determine whether any neighborhood has a non-neutral statistic.
-    # Neutral values differ by method: 1.0 for 'pval' (p-values are never < -2.0,
-    # so the old `lt(large_threshold)` check always returned False for pval),
-    # and 0.0 for 'tstat'/'hill'.
-    neutral_value = 1.0 if method == 'pval' else 0.0
+    # Neutral values: 1.0 for p-value methods ('pval', 'hillp'), 0.0 for rank methods.
+    neutral_value = 1.0 if method in ('pval', 'hillp') else 0.0
     n_passing = (df_n_a_tstats['n_a_tstat'] != neutral_value).sum()
     logger.info(
         f"{uniprot_id}: {n_passing} neighborhoods with non-neutral statistic "
@@ -496,12 +540,15 @@ def q_scan_test(
     # logger.info("df_rvas columns: " + ", ".join(df_rvas.columns))
     # logger.info(f"df_rvas: {df_rvas.head()}")
 
-    large_threshold = -2.0  # threshold for filtering residues with no variants
+    large_threshold = -2.0  # t-statistic gate applied in compute_all_n_a_tstats
     min_variants = 10  # minimum number of variants required for a valid neighborhood
+    # FDR threshold is method-dependent: p-value methods use 0.05 (matching the
+    # binary pipeline convention); rank methods use the same -2.0 t-stat gate.
+    fdr_large_threshold = 0.05 if method in ('pval', 'hillp') else large_threshold
 
     # Handle FDR-only mode
     if fdr_only:
-        df_results = q_compute_fdr(results_dir, fdr_cutoff, df_fdr_filter, reference_dir, n_a_tstat_file, large_threshold)
+        df_results = q_compute_fdr(results_dir, fdr_cutoff, df_fdr_filter, reference_dir, n_a_tstat_file, fdr_large_threshold)
         df_results.to_csv(f'{results_dir}/{fdr_file}', sep='\t', index=False)
         return
 
@@ -536,6 +583,6 @@ def q_scan_test(
     
     # Compute FDR if requested
     if not no_fdr:
-        df_results = q_compute_fdr(results_dir, fdr_cutoff, df_fdr_filter, reference_dir, n_a_tstat_file, large_threshold)
+        df_results = q_compute_fdr(results_dir, fdr_cutoff, df_fdr_filter, reference_dir, n_a_tstat_file, fdr_large_threshold)
         df_results.to_csv(f'{results_dir}/{fdr_file}', sep='\t', index=False)
     
