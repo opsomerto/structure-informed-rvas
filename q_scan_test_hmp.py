@@ -24,8 +24,8 @@ _NEUTRAL = {'tstat': 0.0, 'hill': 0.0, 'pval': 1.0, 'hillp': 1.0}
 
 
 def _h5_path(trait):
-    """Return the per-trait p_values.h5 path (relative to CWD)."""
-    return f'ukbb_{trait}_gp/p_values.h5'
+    """Return the per-trait p_values.h5 path (relative to current working directory)."""
+    return f'q3dnt_results/ukbb_{trait}_pval_all-nbhd_gp250506/p_values.h5'
 
 
 def _build_cluster(traits, cluster, master_path, neutral, n_sims_expected=None):
@@ -48,7 +48,7 @@ def _build_cluster(traits, cluster, master_path, neutral, n_sims_expected=None):
         traits:           list of trait strings for this cluster
         cluster:          cluster label string (must not contain a dot)
         master_path:      absolute path to the master HDF5 file (opened with 'a')
-        neutral:          neutral value (0.0 for hill/tstat, 1.0 for pval)
+        neutral:          neutral value (0.0 for hill/tstat, 1.0 for hillp/pval)
         n_sims_expected:  expected null simulation count (None = infer from first file)
 
     Returns:
@@ -166,7 +166,7 @@ def build_hmp_master_h5(trait_cluster_file, results_dir, stat_method='hill'):
     Build the master p_values.h5 from per-trait h5 files.
 
     Reads a TSV with columns 'trait' and 'cluster', streams each trait's
-    ukbb_{trait}_gp/p_values.h5, and writes cluster-level harmonic mean
+    q3dnt_results/ukbb_{trait}_pval_all-nbhd_gp250506/p_values.h5, and writes cluster-level harmonic mean
     statistics to {results_dir}/p_values.h5.
 
     Args:
