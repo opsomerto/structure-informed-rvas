@@ -606,7 +606,8 @@ if __name__ == '__main__':
         from q_scan_test_hmp import build_hmp_master_h5
         from q_empirical_fdr_hmp import q_compute_fdr_hmp
         logger.info('Starting HMP pipeline (Phase 1: building master h5)')
-        build_hmp_master_h5(args.trait_cluster_file, args.results_dir, args.stat_method)
+        build_hmp_master_h5(args.trait_cluster_file, args.results_dir, args.stat_method,
+                            args.min_variants)
         if not args.no_fdr:
             logger.info('HMP pipeline (Phase 2: FDR correction)')
             df_results = q_compute_fdr_hmp(

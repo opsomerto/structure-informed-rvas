@@ -28,21 +28,27 @@ def _h5_path(trait):
     return f'q3dnt_results/ukbb_{trait}_pval_all-nbhd_gp250506/p_values.h5'
 
 
-def _build_cluster(traits, cluster, master_path, neutral, n_sims_expected=None):
+def _build_cluster(traits, cluster, master_path, neutral, n_sims_expected=None,
+                   min_variants=10):
     """
     Stream all trait files for one cluster and accumulate harmonic mean statistics.
 
+    A neighborhood m in trait k is considered *valid* if it has at least
+    min_variants variants in the neighborhood (read from the _mean_beta dataset).
+    This includes neighborhoods whose observed statistic is neutral (no signal but
+    enough data to test), which is the correct behaviour: a valid null result
+    should count in the denominator of the harmonic mean.
+
     For each (protein p, neighborhood m) the HM observed statistic is:
 
-        HM_obs[m]  = K_valid[m] / sum_{k: obs[k,m] != neutral} (1 / obs[k,m])
+        HM_obs[m]  = K_valid[m] / sum_{k: n_betahat[k,m] >= min_variants} (1 / obs[k,m])
 
-    where K_valid[m] is the number of traits with a non-neutral observed stat at m.
-    The same set of valid traits determines the null accumulation:
-
-        HM_null[m,s] = K_valid[m] / sum_{k: obs[k,m] != neutral} (1 / null[k,m,s])
-
-    If any null[k,m,s] is zero (neutral for hill/tstat), 1/0 = inf; the resulting
-    HM_null value is clamped to neutral after the harmonic mean is computed.
+    Note on neutral statistics and method choice:
+    - pval/hillp (neutral=1.0): a valid-but-neutral entry contributes 1/1.0 = 1.0 to
+      the sum, pulling the HM toward 1.0 (non-significant). Well-behaved.
+    - hill/tstat (neutral=0.0): a valid-but-neutral entry contributes 1/0 = inf,
+      which after clamping makes HM_obs collapse to 0 (neutral) for that neighborhood.
+      This is overly conservative; pval/hillp methods are preferred for the HMP pipeline.
 
     Args:
         traits:           list of trait strings for this cluster
@@ -50,6 +56,7 @@ def _build_cluster(traits, cluster, master_path, neutral, n_sims_expected=None):
         master_path:      absolute path to the master HDF5 file (opened with 'a')
         neutral:          neutral value (0.0 for hill/tstat, 1.0 for hillp/pval)
         n_sims_expected:  expected null simulation count (None = infer from first file)
+        min_variants:     minimum number of variants in the neighborhood for a valid test
 
     Returns:
         (entry_ids_written, n_sims)
@@ -87,6 +94,18 @@ def _build_cluster(traits, cluster, master_path, neutral, n_sims_expected=None):
                     else np.arange(1, len(obs_stat) + 1)
                 )
 
+                # Validity: neighborhoods with sufficient variant count.
+                # Uses n_betahat from the _mean_beta dataset (col 1).
+                # This includes valid-but-neutral neighborhoods (enough variants
+                # but no signal), unlike the old obs_stat != neutral criterion.
+                mean_beta_key = f'{p}_mean_beta'
+                if mean_beta_key in fid:
+                    n_betahat = fid[mean_beta_key][:, 1]  # (n_res,)
+                    vmask = n_betahat >= min_variants      # (n_res,)
+                else:
+                    # Fallback if _mean_beta is absent: use old criterion
+                    vmask = obs_stat != neutral
+
                 # Initialize accumulators on first encounter for this protein
                 if p not in S_obs:
                     S_obs[p] = np.zeros(len(obs_stat))
@@ -100,9 +119,6 @@ def _build_cluster(traits, cluster, master_path, neutral, n_sims_expected=None):
                         f'skipping this protein for this trait'
                     )
                     continue
-
-                # Validity: neighborhoods where the observed stat is non-neutral
-                vmask = obs_stat != neutral  # (n_res,)
 
                 count_valid[p] += vmask.astype(np.int32)
                 with np.errstate(divide='ignore', invalid='ignore'):
@@ -161,7 +177,8 @@ def _build_cluster(traits, cluster, master_path, neutral, n_sims_expected=None):
     return entry_ids_written, n_sims
 
 
-def build_hmp_master_h5(trait_cluster_file, results_dir, stat_method='hill'):
+def build_hmp_master_h5(trait_cluster_file, results_dir, stat_method='hill',
+                        min_variants=10):
     """
     Build the master p_values.h5 from per-trait h5 files.
 
@@ -172,7 +189,9 @@ def build_hmp_master_h5(trait_cluster_file, results_dir, stat_method='hill'):
     Args:
         trait_cluster_file: path to TSV with columns 'trait' and 'cluster'
         results_dir:        output directory; master h5 written here
-        stat_method:        'tstat', 'hill', or 'pval' — determines neutral value
+        stat_method:        'tstat', 'hill', 'pval', or 'hillp' — determines neutral value
+        min_variants:       minimum variants in a neighborhood to count a trait as valid
+                            (default 10, matching the q_scan_test threshold)
 
     Returns:
         path to the master h5 file
@@ -190,14 +209,16 @@ def build_hmp_master_h5(trait_cluster_file, results_dir, stat_method='hill'):
     clusters = df_tc['cluster'].unique()
     logger.info(
         f'HMP Phase 1: {len(clusters)} clusters, {len(df_tc)} trait rows, '
-        f'stat_method={stat_method}, neutral={neutral}'
+        f'stat_method={stat_method}, neutral={neutral}, min_variants={min_variants}'
     )
 
     n_sims = None
     for cluster in clusters:
         traits = df_tc.loc[df_tc['cluster'] == cluster, 'trait'].tolist()
         logger.info(f'Cluster {cluster}: combining {len(traits)} traits')
-        ids, n_sims = _build_cluster(traits, cluster, master_path, neutral, n_sims)
+        ids, n_sims = _build_cluster(
+            traits, cluster, master_path, neutral, n_sims, min_variants
+        )
         logger.info(f'  -> {len(ids)} entries written')
 
     logger.info(f'Master h5 complete: path={master_path}, n_sims={n_sims}')
