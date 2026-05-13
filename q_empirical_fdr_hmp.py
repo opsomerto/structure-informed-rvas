@@ -209,9 +209,11 @@ def _hmp_streaming_null_pass(h5_path, entry_ids_loaded, obs_sorted, aa_pos_filte
                     min_stats_per_sim, np.min(null_stat, axis=0)
                 )
 
-                # FDR: accumulate reverse rank counts for values below threshold
+                # FDR: accumulate reverse rank counts for values at or below threshold.
+                # Using <= (not <) so that neutral null values (e.g. p=1.0 for pval)
+                # are counted as false discoveries for neutral observations.
                 null_flat = null_stat.flatten()
-                null_valid = null_flat[null_flat < large_threshold]
+                null_valid = null_flat[null_flat <= large_threshold]
                 if len(null_valid) > 0:
                     r = np.searchsorted(obs_sorted, null_valid, side='left')
                     # r == N bins null values larger than all observations;
@@ -233,7 +235,7 @@ def _hmp_apply_corrections(df_stats, false_discoveries, fwer):
     df_stats['fwer'] = fwer
 
     return df_stats[['uniprot_id', 'cluster', 'aa_pos', 'n_a_tstat',
-                      'fdr', 'fwer', 'mean_betahat', 'n_betahat']]
+                      'false_discoveries_avg', 'fdr', 'fwer', 'mean_betahat', 'n_betahat']]
 
 
 def summarize_results_hmp(df_results, fdr_cutoff, fwer_cutoff=0.05):
