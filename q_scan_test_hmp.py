@@ -23,12 +23,12 @@ logger = get_logger(__name__)
 _NEUTRAL = {'tstat': 0.0, 'hill': 0.0, 'pval': 1.0, 'hillp': 1.0}
 
 
-def _h5_path(trait):
+def _h5_path(trait, stat_method):
     """Return the per-trait p_values.h5 path (relative to current working directory)."""
-    return f'q3dnt_results/ukbb_{trait}_pval_all-nbhd_gp250506/p_values.h5'
+    return f'q3dnt_results/ukbb_{trait}_{stat_method}_all-nbhd_gp250506/p_values.h5'
 
 
-def _build_cluster(traits, cluster, master_path, neutral, n_sims_expected=None,
+def _build_cluster(traits, stat_method,cluster, master_path, neutral, n_sims_expected=None,
                    min_variants=10):
     """
     Stream all trait files for one cluster and accumulate harmonic mean statistics.
@@ -68,7 +68,7 @@ def _build_cluster(traits, cluster, master_path, neutral, n_sims_expected=None,
     n_sims = n_sims_expected
 
     for k_idx, trait in enumerate(traits):
-        h5path = _h5_path(trait)
+        h5path = _h5_path(trait, stat_method)
         if not os.path.exists(h5path):
             logger.warning(f'Trait file not found, skipping: {h5path}')
             continue
@@ -217,7 +217,7 @@ def build_hmp_master_h5(trait_cluster_file, results_dir, stat_method='hill',
         traits = df_tc.loc[df_tc['cluster'] == cluster, 'trait'].tolist()
         logger.info(f'Cluster {cluster}: combining {len(traits)} traits')
         ids, n_sims = _build_cluster(
-            traits, cluster, master_path, neutral, n_sims, min_variants
+            traits, stat_method, cluster, master_path, neutral, n_sims, min_variants
         )
         logger.info(f'  -> {len(ids)} entries written')
 
