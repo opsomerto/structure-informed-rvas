@@ -446,8 +446,21 @@ if __name__ == '__main__':
         default=None,
         help='''
         Path to a TSV with columns "trait" and "cluster" that specifies which
-        per-trait ukbb_{trait}_gp/p_values.h5 files to combine and how to group
-        them into clusters. Required when --run-hmp is used.
+        per-trait p_values.h5 files to combine and how to group them into
+        clusters. Required when --run-hmp is used (Phase 1 only).
+        ''',
+    )
+    parser.add_argument(
+        '--input-dir-hmp',
+        type=str,
+        default=None,
+        help='''
+        Directory template for per-trait p_values.h5 files used by --run-hmp
+        (Phase 1). May contain {trait} and {stat_method} placeholders which are
+        substituted for each trait row in --trait-cluster-file. The filename
+        p_values.h5 is appended automatically. Example:
+        "q3dnt_results/ukbb_{trait}_{stat_method}_all-nbhd_gp250506"
+        Required when --run-hmp is used without --fdr-only.
         ''',
     )
     args = parser.parse_args()
@@ -603,11 +616,13 @@ if __name__ == '__main__':
     elif args.run_hmp and not args.fdr_only:
         if args.trait_cluster_file is None:
             raise ValueError('--run-hmp requires --trait-cluster-file')
+        if args.input_dir_hmp is None:
+            raise ValueError('--run-hmp requires --input-dir-hmp')
         from q_scan_test_hmp import build_hmp_master_h5
         from q_empirical_fdr_hmp import q_compute_fdr_hmp
         logger.info('Starting HMP pipeline (Phase 1: building master h5)')
-        build_hmp_master_h5(args.trait_cluster_file, args.results_dir, args.stat_method,
-                            args.min_variants)
+        build_hmp_master_h5(args.trait_cluster_file, args.results_dir, args.input_dir_hmp,
+                            args.stat_method, args.min_variants)
         if not args.no_fdr:
             logger.info('HMP pipeline (Phase 2: FDR correction)')
             df_results = q_compute_fdr_hmp(

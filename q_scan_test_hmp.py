@@ -23,13 +23,16 @@ logger = get_logger(__name__)
 _NEUTRAL = {'tstat': 0.0, 'hill': 0.0, 'pval': 1.0, 'hillp': 1.0}
 
 
-def _h5_path(trait, stat_method):
-    """Return the per-trait p_values.h5 path (relative to current working directory)."""
-    return f'q3dnt_results/ukbb_{trait}_{stat_method}_all-nbhd_gp250506/p_values.h5'
+def _h5_path(trait, stat_method, input_dir_template):
+    """Return the per-trait p_values.h5 path by formatting the user-supplied template."""
+    return os.path.join(
+        input_dir_template.format(trait=trait, stat_method=stat_method),
+        'p_values.h5',
+    )
 
 
-def _build_cluster(traits, stat_method,cluster, master_path, neutral, n_sims_expected=None,
-                   min_variants=10):
+def _build_cluster(traits, stat_method, cluster, master_path, neutral, input_dir_template,
+                   n_sims_expected=None, min_variants=10):
     """
     Stream all trait files for one cluster and accumulate harmonic mean statistics.
 
@@ -68,7 +71,7 @@ def _build_cluster(traits, stat_method,cluster, master_path, neutral, n_sims_exp
     n_sims = n_sims_expected
 
     for k_idx, trait in enumerate(traits):
-        h5path = _h5_path(trait, stat_method)
+        h5path = _h5_path(trait, stat_method, input_dir_template)
         if not os.path.exists(h5path):
             logger.warning(f'Trait file not found, skipping: {h5path}')
             continue
@@ -177,21 +180,24 @@ def _build_cluster(traits, stat_method,cluster, master_path, neutral, n_sims_exp
     return entry_ids_written, n_sims
 
 
-def build_hmp_master_h5(trait_cluster_file, results_dir, stat_method='hill',
-                        min_variants=10):
+def build_hmp_master_h5(trait_cluster_file, results_dir, input_dir_template,
+                        stat_method='hill', min_variants=10):
     """
     Build the master p_values.h5 from per-trait h5 files.
 
     Reads a TSV with columns 'trait' and 'cluster', streams each trait's
-    q3dnt_results/ukbb_{trait}_pval_all-nbhd_gp250506/p_values.h5, and writes cluster-level harmonic mean
+    {input_dir_template}/p_values.h5 (where {trait} and {stat_method} are
+    substituted from the template), and writes cluster-level harmonic mean
     statistics to {results_dir}/p_values.h5.
 
     Args:
-        trait_cluster_file: path to TSV with columns 'trait' and 'cluster'
-        results_dir:        output directory; master h5 written here
-        stat_method:        'tstat', 'hill', 'pval', or 'hillp' — determines neutral value
-        min_variants:       minimum variants in a neighborhood to count a trait as valid
-                            (default 10, matching the q_scan_test threshold)
+        trait_cluster_file:  path to TSV with columns 'trait' and 'cluster'
+        results_dir:         output directory; master h5 written here
+        input_dir_template:  directory template for per-trait h5 files; may
+                             contain {trait} and {stat_method} placeholders
+                             (e.g. 'q3dnt_results/ukbb_{trait}_{stat_method}_all-nbhd_gp250506')
+        stat_method:         'tstat', 'hill', 'pval', or 'hillp'
+        min_variants:        minimum variants in a neighborhood to count a trait as valid
 
     Returns:
         path to the master h5 file
@@ -217,7 +223,8 @@ def build_hmp_master_h5(trait_cluster_file, results_dir, stat_method='hill',
         traits = df_tc.loc[df_tc['cluster'] == cluster, 'trait'].tolist()
         logger.info(f'Cluster {cluster}: combining {len(traits)} traits')
         ids, n_sims = _build_cluster(
-            traits, stat_method, cluster, master_path, neutral, n_sims, min_variants
+            traits, stat_method, cluster, master_path, neutral, input_dir_template,
+            n_sims, min_variants,
         )
         logger.info(f'  -> {len(ids)} entries written')
 
