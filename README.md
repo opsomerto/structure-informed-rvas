@@ -1,5 +1,5 @@
 ## Introduction
-The 3D neighborhood test systematically identifies neighborhoods within a protein that have significant enrichments of case missense variants over control missense variants.
+The 3D neighborhood test systematically identifies neighborhoods within a protein that have significant enrichments of case missense variants over control missense variants. For more information, see our manuscript: https://www.medrxiv.org/content/10.64898/2026.05.29.26354366v1. To reproduce results from the manuscript, first complete complete the setup for this software and then go to https://tinyurl.com/462tz36j for the input data and scripts.
 
 ## Installation & Setup
 
@@ -32,7 +32,7 @@ working-directory/
 ```
 To set this up:
 
-1. Download sir-data.tar.gz [here](https://www.dropbox.com/scl/fi/t4it7sa9lkdx9maj0vois/sir-data.tar.gz?rlkey=flvsvmzyopj1cbn6gya0c3am0&st=uyk0l7iw&dl=0) or `wget -O sir-data.tar.gz "https://www.dropbox.com/scl/fi/t4it7sa9lkdx9maj0vois/sir-data.tar.gz?rlkey=flvsvmzyopj1cbn6gya0c3am0&st=uyk0l7iw&dl=1"`
+1. Download sir-data.tar.gz [here](https://www.dropbox.com/scl/fi/83t5e8u33refxp1rin2sv/sir-data.tar.gz?rlkey=ect07qn4dmp6ewhnrp7jyymej&st=u6elrcjj&dl=0) or `wget -O sir-data.tar.gz "https://www.dropbox.com/scl/fi/83t5e8u33refxp1rin2sv/sir-data.tar.gz?rlkey=ect07qn4dmp6ewhnrp7jyymej&st=u6elrcjj&dl=1"`
 2. Move sir-data.tar.gz to your working directory
 3. Extract it: `tar -xzf sir-data.tar.gz`
 4. (Optional) Remove the archive: `rm sir-data.tar.gz`
