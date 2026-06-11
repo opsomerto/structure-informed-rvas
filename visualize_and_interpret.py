@@ -869,7 +869,7 @@ def cmd_nbhd_features(args):
     nbhd = _compute_nbhd(args.uniprot, center, args.reference_dir, args.radius, args.pae_cutoff)
     print(f"Neighborhood centered at {gene_name} ({args.uniprot}) aa {center}: {len(nbhd)} residues")
 
-    pval_file = os.path.join(args.results_dir, args.pval_file)
+    pval_file = args.pval_file
     with h5py.File(pval_file, 'r') as fid:
         df_mut = read_original_mutation_data(fid, args.uniprot)
 
@@ -904,33 +904,87 @@ def cmd_nbhd_features(args):
 # Subcommand: color
 # ---------------------------------------------------------------------------
 
+def _make_mut_pse(pymol_cmd, input_cif, chain, uniprot_id, pval_file, output_pse):
+    """Create a _mut-style PSE: grey cartoon with case/control mutation spheres on one chain."""
+    import h5py
+    import hdf5plugin
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from utils import read_original_mutation_data
+
+    with h5py.File(pval_file, 'r') as fid:
+        df_mut = read_original_mutation_data(fid, uniprot_id)
+
+    pymol_cmd.reinitialize()
+    pymol_cmd.load(input_cif, "complex")
+    pymol_cmd.hide("everything", "all")
+    pymol_cmd.show("cartoon", "all")
+    pymol_cmd.show("spheres", "hetatm and not resn HOH")
+    pymol_cmd.color("grey70", "all")
+    pymol_cmd.bg_color("white")
+
+    # Extract target chain so it can have independent transparency
+    pymol_cmd.extract("target_chain", f"chain {chain}")
+    pymol_cmd.set("cartoon_transparency", 0.6, "complex")
+    pymol_cmd.set("cartoon_transparency", 0.0, "target_chain")
+
+    pymol_cmd.set("cartoon_loop_radius", 0.4)
+    pymol_cmd.set("specular", 0.0)
+    pymol_cmd.set("ambient", 0.4)
+    pymol_cmd.set("ray_trace_mode", 1)
+    pymol_cmd.set("ray_trace_gain", 0.15)
+
+    control_mask = (df_mut['ac_control'] >= 1) & (df_mut['ac_case'] == 0)
+    case_mask    = (df_mut['ac_case']    >= 1) & (df_mut['ac_control'] == 0)
+    both_mask    = (df_mut['ac_case']    >= 1) & (df_mut['ac_control'] >= 1)
+
+    def _select_show(name, positions, color):
+        if not positions:
+            return
+        resi_str = '+'.join(str(p) for p in positions)
+        pymol_cmd.select(name, f"target_chain and resi {resi_str} and name CA")
+        pymol_cmd.show("spheres", name)
+        pymol_cmd.color(color, name)
+
+    _select_show("control_only",     df_mut[control_mask]['aa_pos'].tolist(), "blue")
+    _select_show("case_only",        df_mut[case_mask]['aa_pos'].tolist(),    "red")
+    _select_show("case_and_control", df_mut[both_mask]['aa_pos'].tolist(),    "purple")
+
+    pymol_cmd.save(output_pse)
+    print(f"[OK] Saved mutations session to {output_pse}")
+
+
 def cmd_color(args):
     """
     CLI handler for `color`. Loads a CIF structure, greys out all chains, then
     colors the specified chain by per-residue case/control ratio using a
-    green (low) to red (high) spectrum stored as B-factors. Ratios are read
+    blue (low) to red (high) spectrum stored as B-factors. Ratios are read
     from p_values.h5 (preferred — smooth gradient over all residues) or a TSV.
     Saves a PyMOL session file (.pse).
     """
     from pymol import cmd as pymol_cmd
 
-    if not args.tsv and not args.results_dir:
-        raise ValueError("Either --tsv or --results-dir must be provided")
+    if not args.tsv and not args.pval_file:
+        raise ValueError("Either --tsv or --pval-file must be provided")
 
     pymol_cmd.reinitialize()
     pymol_cmd.load(args.input_cif, "complex")
     pymol_cmd.hide("everything", "all")
     pymol_cmd.show("cartoon", "all")
+    pymol_cmd.show("spheres", "hetatm and not resn HOH")
     pymol_cmd.color("grey70", "all")
-    pymol_cmd.set("cartoon_transparency", 0.6, "all")
     pymol_cmd.bg_color("white")
+
+    # Extract the target chain into its own object so it can have independent transparency
+    pymol_cmd.extract("target_chain", f"chain {args.chain}")
+    pymol_cmd.set("cartoon_transparency", 0.6, "complex")
+    pymol_cmd.set("cartoon_transparency", 0.0, "target_chain")
 
     residue_ratios = {}
 
-    if args.results_dir:
+    if args.pval_file:
         import h5py
         import hdf5plugin
-        pval_file = os.path.join(args.results_dir, args.pval_file)
+        pval_file = args.pval_file
         with h5py.File(pval_file, 'r') as fid:
             case_control = fid[f'{args.uniprot}_nbhd'][:]
         nbhd_case = case_control[:, 0]
@@ -955,14 +1009,25 @@ def cmd_color(args):
 
     max_ratio = max(residue_ratios.values()) or 1.0
     for resi, ratio in residue_ratios.items():
-        pymol_cmd.alter(f"chain {args.chain} and resi {resi}", f"b={ratio / max_ratio}")
+        pymol_cmd.alter(f"target_chain and resi {resi}", f"b={(ratio / max_ratio)**2}")
 
     pymol_cmd.rebuild()
-    pymol_cmd.spectrum("b", "green_red", f"chain {args.chain}", byres=1)
-    pymol_cmd.set("cartoon_transparency", 0.0, f"chain {args.chain}")
+    pymol_cmd.set_color("ratio_blue", [0.45, 0.78, 1.0])
+    pymol_cmd.set_color("ratio_red",  [1.0, 0.55, 0.55])
+    pymol_cmd.spectrum("b", "ratio_blue ratio_red", "target_chain", byres=1)
+    pymol_cmd.set("specular", 0.0)
+    pymol_cmd.set("ambient", 0.4)
+    pymol_cmd.set("ray_trace_mode", 1)
+    pymol_cmd.set("ray_trace_gain", 0.15)
+    pymol_cmd.set("cartoon_loop_radius", 0.4)
     pymol_cmd.save(args.output_pse)
-
     print(f"[OK] Saved colored session to {args.output_pse}")
+
+    if args.pval_file:
+        stem = args.output_pse[:-len("_ratio.pse")] if args.output_pse.endswith("_ratio.pse") else args.output_pse[:-4]
+        mut_pse = stem + "_mut.pse"
+        _make_mut_pse(pymol_cmd, args.input_cif, args.chain, args.uniprot, pval_file, mut_pse)
+
     return 0
 
 
@@ -974,7 +1039,7 @@ def cmd_visualize(args):
     """CLI handler for `visualize`. Delegates to pymol_code.run_all for one protein."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from pymol_code import run_all
-    run_all(args.uniprot, args.results_dir, args.reference_dir)
+    run_all(args.uniprot, args.results_dir, args.reference_dir, pval_file=args.pval_file)
     return 0
 
 
@@ -1023,7 +1088,7 @@ def cmd_analyze(args):
     os.makedirs(annotations_dir, exist_ok=True)
     os.makedirs(cache_dir, exist_ok=True)
 
-    pval_path = os.path.join(args.results_dir, args.pval_file)
+    pval_path = args.pval_file
     nbhd_dir = os.path.join(args.results_dir, 'neighborhoods')
     os.makedirs(nbhd_dir, exist_ok=True)
 
@@ -1042,7 +1107,7 @@ def cmd_analyze(args):
         if not args.skip_visualization:
             print("  Running visualization...")
             try:
-                run_all(uniprot_id, args.results_dir, args.reference_dir)
+                run_all(uniprot_id, args.results_dir, args.reference_dir, pval_file=pval_path)
                 print("  Visualization done.")
             except Exception as e:
                 print(f"  Warning: visualization failed: {e}")
@@ -1102,7 +1167,7 @@ def cmd_analyze(args):
     return 0
 
 
-def pse_to_png(input_pse):
+def pse_to_png(input_pse, ray_trace_gain=0.15):
     from pymol import cmd
 
     output_png = input_pse.replace(".pse", ".png")
@@ -1114,8 +1179,8 @@ def pse_to_png(input_pse):
     # Rendering settings
     cmd.set("ambient", 0.5)
     cmd.set("ray_shadows", 0)
-    cmd.set("ray_trace_mode", 0.2)
-    cmd.set("ray_trace_gain", 0.05)
+    cmd.set("ray_trace_mode", 1)
+    cmd.set("ray_trace_gain", ray_trace_gain)
     cmd.set("ray_opaque_background", 1)
     cmd.bg_color("white")
 
@@ -1128,6 +1193,63 @@ def pse_to_png(input_pse):
 
     print(f"[INFO] Saved PNG to: {output_png}")
     cmd.quit(0)
+
+
+def pse_to_gif(input_pse, n_frames=36, width=640, height=480, fps=15, ray_trace_gain=0.15):
+    from pymol import cmd
+    import tempfile
+
+    try:
+        from PIL import Image
+    except ImportError:
+        print("[ERROR] Pillow is required: pip install Pillow")
+        return
+
+    output_gif = input_pse.replace(".pse", ".gif")
+    print(f"[INFO] Loading PSE: {input_pse}")
+    print(f"[INFO] Output GIF:  {output_gif} ({n_frames} frames at {fps} fps)")
+
+    cmd.load(input_pse)
+    cmd.set("ambient", 0.5)
+    cmd.set("ray_shadows", 0)
+    cmd.set("ray_trace_mode", 1)
+    cmd.set("ray_trace_gain", ray_trace_gain)
+    cmd.set("ray_opaque_background", 1)
+    cmd.bg_color("white")
+
+    tmpdir = tempfile.mkdtemp()
+    frame_paths = []
+    step = 360.0 / n_frames
+
+    try:
+        for i in range(n_frames):
+            frame_path = os.path.join(tmpdir, f"frame_{i:04d}.png")
+            print(f"[INFO] Rendering frame {i + 1}/{n_frames}...")
+            cmd.png(frame_path, width, height, dpi=72, ray=1, quiet=1)
+            frame_paths.append(frame_path)
+            cmd.turn("y", step)
+
+        print("[INFO] Stitching frames into GIF...")
+        images = [Image.open(p).convert("RGB") for p in frame_paths]
+        duration_ms = int(1000 / fps)
+        images[0].save(
+            output_gif,
+            save_all=True,
+            append_images=images[1:],
+            loop=0,
+            duration=duration_ms,
+            optimize=False,
+        )
+    finally:
+        for p in frame_paths:
+            if os.path.exists(p):
+                os.remove(p)
+        if os.path.isdir(tmpdir):
+            os.rmdir(tmpdir)
+
+    print(f"[INFO] Saved GIF to: {output_gif}")
+    cmd.quit(0)
+
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -1165,9 +1287,9 @@ def main():
     p_nbhd.add_argument('--reference-dir', required=True,
                         help='Reference directory (same as for run.py)')
     p_nbhd.add_argument('--results-dir', required=True,
-                        help='Results directory containing p_values.h5')
-    p_nbhd.add_argument('--pval-file', default='p_values.h5',
-                        help='HDF5 filename within --results-dir (default: p_values.h5)')
+                        help='Results directory (for output files)')
+    p_nbhd.add_argument('--pval-file', required=True,
+                        help='Full path to p_values.h5 HDF5 file')
     p_nbhd.add_argument('--uniprot', required=True, help='UniProt ID')
     p_nbhd.add_argument('--aa-pos', required=True, type=int,
                         help='Neighborhood center residue position')
@@ -1186,6 +1308,7 @@ def main():
     p_vis.add_argument('--uniprot', required=True, help='UniProt ID')
     p_vis.add_argument('--results-dir', required=True, help='Results directory')
     p_vis.add_argument('--reference-dir', required=True, help='Reference directory')
+    p_vis.add_argument('--pval-file', required=True, help='Full path to p_values.h5 HDF5 file')
 
     # -- run_all subcommand --
     p_analyze = subparsers.add_parser(
@@ -1208,8 +1331,8 @@ def main():
                            help='Directory for annotation files (default: {results-dir}/annotations)')
     p_analyze.add_argument('--cache-dir', default=None,
                            help='Cache directory for UniProt API calls (default: {annotations-dir}/cache)')
-    p_analyze.add_argument('--pval-file', default='p_values.h5',
-                           help='HDF5 filename within --results-dir (default: p_values.h5)')
+    p_analyze.add_argument('--pval-file', required=True,
+                           help='Full path to p_values.h5 HDF5 file')
     p_analyze.add_argument('--radius', type=float, default=15.0,
                            help='Neighborhood radius in Angstroms (default: 15.0)')
     p_analyze.add_argument('--pae-cutoff', type=float, default=15.0,
@@ -1228,11 +1351,8 @@ def main():
     )
     p_color.add_argument('--tsv', default=None,
                          help='TSV file with uniprot_id, aa_pos, ratio columns')
-    p_color.add_argument('--results-dir', default=None,
-                         help='Results directory containing p_values.h5 (all-residue ratios; '
-                              'preferred over --tsv for smooth gradients)')
-    p_color.add_argument('--pval-file', default='p_values.h5',
-                         help='HDF5 filename within --results-dir (default: p_values.h5)')
+    p_color.add_argument('--pval-file', default=None,
+                         help='Full path to p_values.h5 HDF5 file (preferred over --tsv for smooth gradients)')
     p_color.add_argument('--input-cif', required=True, help='Input structure (.cif)')
     p_color.add_argument('--output-pse', required=True, help='Output PyMOL session (.pse)')
     p_color.add_argument('--chain', required=True, help='Target chain ID (e.g. A)')
@@ -1245,6 +1365,25 @@ def main():
         description='Loads a PyMOL session file and saves a PNG image of the current view.'
     )
     p_pse_to_png.add_argument('input_pse', help='Input PyMOL session file (.pse)')
+    p_pse_to_png.add_argument('--ray-trace-gain', type=float, default=0.15,
+                               help='Outline thickness (default: 0.15; use smaller for large complexes)')
+
+    p_pse_to_gif = subparsers.add_parser(
+        'pse_to_gif',
+        help='Convert a PyMOL session file (.pse) to a rotating GIF',
+        description='Loads a PyMOL session file and saves a GIF of a full y-axis rotation.'
+    )
+    p_pse_to_gif.add_argument('input_pse', help='Input PyMOL session file (.pse)')
+    p_pse_to_gif.add_argument('--n-frames', type=int, default=36,
+                               help='Number of frames for one full rotation (default: 36)')
+    p_pse_to_gif.add_argument('--width', type=int, default=640,
+                               help='Frame width in pixels (default: 640)')
+    p_pse_to_gif.add_argument('--height', type=int, default=480,
+                               help='Frame height in pixels (default: 480)')
+    p_pse_to_gif.add_argument('--fps', type=int, default=15,
+                               help='Frames per second (default: 15)')
+    p_pse_to_gif.add_argument('--ray-trace-gain', type=float, default=0.15,
+                               help='Outline thickness (default: 0.15; use smaller for large complexes)')
 
     args = parser.parse_args()
 
@@ -1259,7 +1398,9 @@ def main():
     elif args.command == 'color':
         return cmd_color(args)
     elif args.command == 'pse_to_png':
-        return pse_to_png(args.input_pse)
+        return pse_to_png(args.input_pse, args.ray_trace_gain)
+    elif args.command == 'pse_to_gif':
+        return pse_to_gif(args.input_pse, args.n_frames, args.width, args.height, args.fps, args.ray_trace_gain)
 
 
 if __name__ == '__main__':

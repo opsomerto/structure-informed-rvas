@@ -44,7 +44,7 @@ def get_pdb_filename(annot_df, info_df):
     return annot_df
 
 
-def pymol_rvas(uniprot_id, reference_directory, results_directory, gene_name=None):
+def pymol_rvas(uniprot_id, reference_directory, results_directory, pval_file, gene_name=None):
     """Create PyMOL visualizations for RVAS results.
 
     Produces two PSE files per protein:
@@ -60,7 +60,7 @@ def pymol_rvas(uniprot_id, reference_directory, results_directory, gene_name=Non
         pymol_dir = os.path.join(results_directory, 'pymol_visualizations')
         os.makedirs(pymol_dir, exist_ok=True)
 
-        df_results_p = os.path.join(results_directory, 'p_values.h5')
+        df_results_p = pval_file
         if not os.path.isfile(df_results_p):
             print(f"[WARNING] Results file not found: {df_results_p}")
             return
@@ -151,7 +151,7 @@ def pymol_rvas(uniprot_id, reference_directory, results_directory, gene_name=Non
         print(f"[ERROR] in pymol_rvas(): {e}")
 
 
-def pymol_scan_test(uniprot_id, reference_directory, results_directory, gene_name=None):
+def pymol_scan_test(uniprot_id, reference_directory, results_directory, pval_file, gene_name=None):
     """Color protein structure by per-residue case/control ratio.
 
     Loads the gray PSE produced by pymol_rvas and colors it on a green-red
@@ -164,7 +164,7 @@ def pymol_scan_test(uniprot_id, reference_directory, results_directory, gene_nam
         pymol_dir = os.path.join(results_directory, 'pymol_visualizations')
         os.makedirs(pymol_dir, exist_ok=True)
 
-        df_results_p = os.path.join(results_directory, 'p_values.h5')
+        df_results_p = pval_file
         with h5py.File(df_results_p, 'r') as fid:
             df_results = read_p_values(fid, uniprot_id)
 
@@ -190,12 +190,19 @@ def pymol_scan_test(uniprot_id, reference_directory, results_directory, gene_nam
             objects = cmd.get_names('objects')[-1]
 
             for _, row in tmp_df[tmp_df['visual_filename'] == v].iterrows():
-                cmd.alter(f"{objects} and resi {int(row['aa_pos'])}", f"b={float(row['ratio_normalized'])}")
+                cmd.alter(f"{objects} and resi {int(row['aa_pos'])}", f"b={float(row['ratio_normalized'])**2}")
             cmd.rebuild()
 
-            cmd.spectrum("b", "green_red", objects, byres=1)
+            cmd.set_color("ratio_blue", [0.45, 0.78, 1.0])
+            cmd.set_color("ratio_red",  [1.0, 0.55, 0.55])
+            cmd.spectrum("b", "ratio_blue ratio_red", objects, byres=1)
             cmd.show("cartoon", objects)
             cmd.hide("lines", objects)
+            cmd.set("specular", 0.0)
+            cmd.set("ambient", 0.4)
+            cmd.set("ray_trace_mode", 1)
+            cmd.set("ray_trace_gain", 0.15)
+            cmd.set("cartoon_loop_radius", 0.4)
 
             cmd.save(f"{v.split('.')[0]}_ratio.pse")
 
@@ -203,7 +210,7 @@ def pymol_scan_test(uniprot_id, reference_directory, results_directory, gene_nam
         print(f"[ERROR] in pymol_scan_test(): {e}")
 
 
-def pymol_neighborhood(uniprot_id, results_directory, reference_directory, gene_name=None):
+def pymol_neighborhood(uniprot_id, results_directory, reference_directory, pval_file, gene_name=None):
     """Re-save the ratio PSE (hook for future neighborhood-level annotations)."""
     try:
         if gene_name is None:
@@ -212,7 +219,7 @@ def pymol_neighborhood(uniprot_id, results_directory, reference_directory, gene_
         pymol_dir = os.path.join(results_directory, 'pymol_visualizations')
         os.makedirs(pymol_dir, exist_ok=True)
 
-        df_results_p = os.path.join(results_directory, 'p_values.h5')
+        df_results_p = pval_file
         with h5py.File(df_results_p, 'r') as fid:
             df_results = read_p_values(fid, uniprot_id)
 
@@ -261,9 +268,9 @@ def make_movie_from_pse(result_directory, pse_name):
         print(f"[ERROR] Failed to create movie from PSE: {e}")
 
 
-def run_all(uniprot_id, results_directory, reference_directory):
+def run_all(uniprot_id, results_directory, reference_directory, pval_file):
     """Run the full PyMOL visualization pipeline for a single protein."""
     gene_name = _load_gene_name(uniprot_id, reference_directory)
-    pymol_rvas(uniprot_id, reference_directory, results_directory, gene_name=gene_name)
-    pymol_scan_test(uniprot_id, reference_directory, results_directory, gene_name=gene_name)
-    pymol_neighborhood(uniprot_id, results_directory, reference_directory, gene_name=gene_name)
+    pymol_rvas(uniprot_id, reference_directory, results_directory, pval_file, gene_name=gene_name)
+    pymol_scan_test(uniprot_id, reference_directory, results_directory, pval_file, gene_name=gene_name)
+    pymol_neighborhood(uniprot_id, results_directory, reference_directory, pval_file, gene_name=gene_name)
